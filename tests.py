@@ -2,11 +2,21 @@ from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from selenium.webdriver.firefox.webdriver import WebDriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
+from django.contrib.auth.models import User
 
 class MySeleniumTests(StaticLiveServerTestCase):
     # carregar una BD de test
     fixtures = ['testdb.json',]
  
+    @classmethod
+    def setUpTestData(cls):
+        # Crear superusuario de prueba
+        User.objects.create_superuser(
+            username='admin',
+            password='admin123',
+            email='admin@test.com'
+        )
+    
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
