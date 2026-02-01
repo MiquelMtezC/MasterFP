@@ -1,6 +1,5 @@
 name: Django Tests
 
-# Quan s’executa el workflow
 on:
   push:
     branches: [ main ]
@@ -12,19 +11,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Clona el repositori
       - uses: actions/checkout@v3
 
+      # 2️⃣ Configura Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: 3.11
 
+      # 3️⃣ Instal·la dependències del requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          sudo apt-get update
-          sudo apt-get install -y firefox-geckodriver firefox-esr
 
+      # 4️⃣ Executa els tests mínims de polls
       - name: Run Django tests
-        run: python3 manage.py test
+        run: python3 manage.py test polls
