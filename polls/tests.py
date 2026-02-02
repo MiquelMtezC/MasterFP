@@ -1,63 +1,107 @@
-from django.test import TestCase
+from django.contrib.staticfiles.testing import StaticLiveServerTestCase
+from selenium.webdriver.firefox.webdriver import WebDriver
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from django.contrib.auth.models import User, Permission
-from django.urls import reverse
-from .models import Question, Choice
+from django.contrib.contenttypes.models import ContentType
 
-
-class StaffReadOnlyTest(TestCase):
+class RobustAdminSeleniumTest(StaticLiveServerTestCase):
 
     @classmethod
-    def setUpTestData(cls):
-        # 1️⃣ Crear superusuari
-        cls.superuser = User.objects.create_superuser(
-            username='admin',
-            email='admin@test.com',
-            password='admin123'
+    def setUpClass(cls):
+        super().setUpClass()
+        opts = Options()
+        # opts.add_argument("--headless")  # comentar per veure el navegador
+        cls.selenium = WebDriver(options=opts)
+        cls.selenium.implicitly_wait(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.selenium.quit()
+        super().tearDownClass()
+
+    def setUp(self):
+        # Crear superusuari admin
+        User.objects.create_superuser(username="admin", password="admin123", email="admin@test.com")
+
+    def login(self, username, password):
+        self.selenium.get(f"{self.live_server_url}/admin/login/?next=/admin/")
+        WebDriverWait(self.selenium, 10).until(
+            EC.presence_of_element_located((By.NAME, "username"))
         )
+        self.selenium.find_element(By.NAME, "username").clear()
+        self.selenium.find_element(By.NAME, "username").send_keys(username)
+        self.selenium.find_element(By.NAME, "password").clear()
+        self.selenium.find_element(By.NAME, "password").send_keys(password)
+        self.selenium.find_element(By.XPATH, '//input[@value="Log in"]').click()
 
-        # 2️⃣ Crear usuari staff només lectura
-        cls.staff_user = User.objects.create_user(
-            username='staffuser',
-            email='staff@test.com',
-            password='staff123',
-            is_staff=True
-        )
+    def logout(self):
+        self.selenium.delete_all_cookies()
+        self.selenium.get(f"{self.live_server_url}/admin/login/?next=/admin/")
 
-        # Assignar permisos de lectura
-        cls.staff_user.user_permissions.add(
-            Permission.objects.get(codename='view_question'),
-            Permission.objects.get(codename='view_choice')
-        )
+    def test_full_admin_flow_with_staff(self):
+        wait = WebDriverWait(self.selenium, 10)
 
-        # 3️⃣ Crear 2 Question amb 2 Choice cadascuna
-        cls.q1 = Question.objects.create(question_text="Pregunta 1?")
-        Choice.objects.create(question=cls.q1, choice_text="Opció 1A", votes=0)
-        Choice.objects.create(question=cls.q1, choice_text="Opció 1B", votes=0)
+        # 1️⃣ Login admin
+        self.login("admin", "admin123")
 
-        cls.q2 = Question.objects.create(question_text="Pregunta 2?")
-        Choice.objects.create(question=cls.q2, choice_text="Opció 2A", votes=0)
-        Choice.objects.create(question=cls.q2, choice_text="Opció 2B", votes=0)
+        # 2️⃣ Crear 2 Questions
+        for i in range(1, 3):
+            self.selenium.get(f"{self.live_server_url}/admin/polls/question/add/")
+            q_input = wait.until(EC.presence_of_element_located((By.ID, "id_question_text")))
+            q_input.clear()
+            q_input.send_keys(f"Question {i}")
+            self.selenium.find_element(By.NAME, "_save").click()
 
-    def test_staff_can_view_questions(self):
-        self.client.login(username='staffuser', password='staff123')
-        response = self.client.get(reverse('admin:polls_question_changelist'))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Pregunta 1?")
-        self.assertContains(response, "Pregunta 2?")
+        # 3️⃣ Crear 2 Choices per Question
+        for i in range(1, 3):
+            for j in range(1, 3):
+                self.selenium.get(f"{self.live_server_url}/admin/polls/choice/add/")
+                question_select = wait.until(EC.presence_of_element_located((By.ID, "id_question")))
+                question_select.find_element(By.XPATH, f'//option[text()="Question {i}"]').click()
+                choice_input = self.selenium.find_element(By.ID, "id_choice_text")
+                choice_input.clear()
+                choice_input.send_keys(f"Choice {i}.{j}")
+                self.selenium.find_element(By.NAME, "_save").click()
 
-    def test_staff_cannot_edit_question(self):
-        self.client.login(username='staffuser', password='staff123')
-        response = self.client.get(
-            reverse('admin:polls_question_change', args=[self.q1.id])
-        )
+        # 4️⃣ Crear usuari miquel/miquel123
+        self.selenium.get(f"{self.live_server_url}/admin/auth/user/add/")
+        username_input = wait.until(EC.presence_of_element_located((By.ID, "id_username")))
+        username_input.send_keys("miquel")
+        self.selenium.find_element(By.ID, "id_password1").send_keys("miquel123")
+        self.selenium.find_element(By.ID, "id_password2").send_keys("miquel123")
+        self.selenium.find_element(By.NAME, "_save").click()
 
-        self.assertEqual(response.status_code, 200)
+        # 5️⃣ Assignar permisos de només lectura via ORM
+        user = User.objects.get(username="miquel")
+        user.is_staff = True  # perquè pugui entrar a admin
+        user.save()
 
-        # No pot guardar canvis
-        self.assertNotContains(response, 'name="_save"')
-        self.assertNotContains(response, 'name="_continue"')
+        # Assignar permisos "view" de Question i Choice
+        for model in ["question", "choice"]:
+            ct = ContentType.objects.get(app_label="polls", model=model)
+            perm = Permission.objects.get(content_type=ct, codename=f"view_{model}")
+            user.user_permissions.add(perm)
+        user.save()
 
-    def test_staff_cannot_add_question(self):
-        self.client.login(username='staffuser', password='staff123')
-        response = self.client.get(reverse('admin:polls_question_add'))
-        self.assertEqual(response.status_code, 403)
+        # 6️⃣ Logout admin
+        self.logout()
+
+        # 7️⃣ Login com miquel
+        self.login("miquel", "miquel123")
+
+        # 8️⃣ Comprovar lectura Questions
+        self.selenium.get(f"{self.live_server_url}/admin/polls/question/")
+        page = self.selenium.page_source
+        assert "Question 1" in page
+        assert "Question 2" in page
+        assert "Add question" not in page  # només lectura
+
+        # 9️⃣ Comprovar lectura Choices
+        self.selenium.get(f"{self.live_server_url}/admin/polls/choice/")
+        page = self.selenium.page_source
+        assert "Choice 1.1" in page
+        assert "Choice 2.2" in page
+        assert "Add choice" not in page  # només lectura
